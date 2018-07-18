@@ -199,6 +199,7 @@ type MediaSegment struct {
 	Discontinuity   bool      // EXT-X-DISCONTINUITY indicates an encoding discontinuity between the media segment that follows it and the one that preceded it (i.e. file format, number and type of tracks, encoding parameters, encoding sequence, timestamp sequence)
 	SCTE            *SCTE     // SCTE-35 used for Ad signaling in HLS
 	ProgramDateTime time.Time // EXT-X-PROGRAM-DATE-TIME tag associates the first sample of a media segment with an absolute date and/or time
+	DateRange       *DateRange
 }
 
 // SCTE holds custom, non EXT-X-DATERANGE, SCTE-35 tags
@@ -277,6 +278,7 @@ type decodingState struct {
 	tagProgramDateTime bool
 	tagKey             bool
 	tagMap             bool
+	tagDateRange       bool
 	programDateTime    time.Time
 	limit              int64
 	offset             int64
@@ -287,4 +289,24 @@ type decodingState struct {
 	xkey               *Key
 	xmap               *Map
 	scte               *SCTE
+	dateRange          *DateRange
+}
+
+type DateRange struct {
+		HasStartDate           bool
+		HasEndDate             bool
+		HasDuration            bool
+		HasPlannedDuration     bool
+
+		ID                     string              // Required
+		Class                  string
+		StartDate              time.Time           // Required?
+		EndDate                time.Time
+		Duration               float64
+		PlannedDuration        float64
+		SCTE35Command          string
+		SCTE35In               string
+		SCTE35Out              string
+		EndOnNext              string
+		X                      map[string]string   // X-<client-attribute> TBD
 }

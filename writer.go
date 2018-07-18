@@ -311,6 +311,121 @@ func (p *MediaPlaylist) AppendSegment(seg *MediaSegment) error {
 	return nil
 }
 
+// Reserve MEDIA-SEQUENCE(p.SeqNo) while replacing segments with Ads
+// startIndex is the position in the playlist, not position in []Segment
+// segmentCount is number of segments to be removed
+// newSegments is new segments to be inserted
+func (p *MediaPlaylist) ReplaceSegments(startIndex, segmentCount uint, newSegments []*MediaSegment) error {
+	if segmentCount <= 0 || startIndex >= p.count {
+		return errors.New("invalid index or segment count")
+	}
+	if startIndex + segmentCount > p.count {
+		segmentCount = p.count - startIndex
+	}
+	var buffer []*MediaSegment
+	for ; p.count > 0 ; p.count-- {
+		buffer = append(buffer, p.Segments[p.head])
+		p.head = (p.head + 1) % p.capacity
+	}
+	if newLength := uint(len(buffer)) - segmentCount + uint(len(newSegments)); newLength > p.capacity {
+		diff := newLength - p.capacity
+		p.Segments = append(p.Segments, make([]*MediaSegment, diff)...)
+		p.capacity = uint(len(p.Segments))
+		p.SetWinSize(p.capacity)
+	}
+	for index, bufferLength := uint(0), uint(len(buffer)); index < bufferLength; {
+		if index == startIndex {
+			for _, segment := range newSegments {
+				if err := p.AppendSegment(segment); err != nil {
+					return err
+				}
+			}
+			index = index + segmentCount // Skip original segments
+		} else {
+			if err := p.AppendSegment(buffer[index]); err != nil {
+				return err
+			}
+			index++
+		}
+	}
+	return nil
+}
+
+// Return (index, count)
+func (p *MediaPlaylist) SearchDateRange(id string) (uint, uint) {
+	var cueOutIndex, cueInIndex, dateRangeLength uint
+	var foundCueOut, foundCueIn bool
+	cueOutIndex, foundCueOut = 0, false
+	cueInIndex, foundCueIn = p.count, false
+	dateRangeLength = 0
+	for count:= uint(0); count != p.count; count++ {
+		index := (p.head + count) % p.capacity
+		if p.Segments[index].DateRange != nil && p.Segments[index].DateRange.ID == id {
+			if !foundCueOut && p.Segments[index].DateRange.SCTE35Out != "" {
+				foundCueOut = true
+				cueOutIndex = index
+			}
+			if !foundCueIn && p.Segments[index].DateRange.SCTE35In != "" {
+				foundCueIn = true
+				cueInIndex = index
+			}
+		}
+		if foundCueOut && foundCueIn {
+			break
+		}
+	}
+	if foundCueIn || foundCueOut {
+		dateRangeLength = (p.capacity + cueInIndex - cueOutIndex) % p.capacity
+	}
+	return cueOutIndex, dateRangeLength
+}
+
+// Return map[DateRangeId]DateRangeDuration
+func (p *MediaPlaylist) GetDateRangeIDs() (map[string]float64) {
+	rv := make(map[string]float64)
+	for count:= uint(0); count != p.count; count++ {
+		index := (p.head + count) % p.capacity
+		if p.Segments[index].DateRange != nil {
+			idFound := false // Check if ID is found already
+			for id, _ := range rv {
+				if id == p.Segments[index].DateRange.ID {
+					idFound = true
+					break
+				}
+			}
+			if !idFound {
+				if p.Segments[index].DateRange.HasDuration {
+					rv[p.Segments[index].DateRange.ID] = p.Segments[index].DateRange.Duration
+				} else {
+					rv[p.Segments[index].DateRange.ID] = p.Segments[index].DateRange.PlannedDuration
+				}
+			}
+		}
+	}
+	return rv
+}
+
+func (p *MediaPlaylist) ReplaceDateRange(eventId string, newSegments []*MediaSegment) error {
+	startIndex, rangeLength := p.SearchDateRange(eventId)
+	rv := p.ReplaceSegments(startIndex, rangeLength, newSegments)
+	if rv == nil {
+		p.SetWinSize(p.Count())
+		if startIndex != 0 {
+			newSegments[0].Discontinuity = true
+		}
+		rangeEnd := (p.head + startIndex + uint(len(newSegments))) % p.capacity
+		if p.Segments[rangeEnd] != nil {
+			if p.Segments[rangeEnd].DateRange != nil && p.Segments[rangeEnd].DateRange.ID == eventId {
+				p.Segments[rangeEnd].DateRange = nil
+			}
+			if rangeEnd != p.head {
+				p.Segments[rangeEnd].Discontinuity = true
+			}
+		}
+	}
+	return rv
+}
+
 // Combines two operations: firstly it removes one chunk from the head of chunk slice and move pointer to
 // next chunk. Secondly it appends one chunk to the tail of chunk slice. Useful for sliding playlists.
 // This operation does reset cache.
@@ -576,6 +691,53 @@ func (p *MediaPlaylist) Encode() *bytes.Buffer {
 			p.buf.WriteString(strconv.FormatInt(seg.Offset, 10))
 			p.buf.WriteRune('\n')
 		}
+		if seg.DateRange != nil {
+			p.buf.WriteString("#EXT-X-DATERANGE:")
+			p.buf.WriteString("ID=\"")
+			p.buf.WriteString(seg.DateRange.ID)
+			p.buf.WriteRune('"')
+
+			if seg.DateRange.Class != "" {
+				p.buf.WriteString(",CLASS=\"")
+				p.buf.WriteString(seg.DateRange.Class)
+				p.buf.WriteRune('"')
+			}
+			if seg.DateRange.HasStartDate {
+				p.buf.WriteString(",START-DATE=\"")
+				p.buf.WriteString(seg.DateRange.StartDate.Format(time.RFC3339))
+				p.buf.WriteRune('"')
+			}
+			if seg.DateRange.HasEndDate {
+				p.buf.WriteString(",END-DATE=\"")
+				p.buf.WriteString(seg.DateRange.EndDate.Format(time.RFC3339))
+				p.buf.WriteRune('"')
+			}
+			if seg.DateRange.HasDuration {
+				p.buf.WriteString(",DURATION=")
+				p.buf.WriteString(strconv.FormatFloat(seg.DateRange.Duration, 'f', 3, 32))
+			}
+			if seg.DateRange.HasPlannedDuration {
+				p.buf.WriteString(",PLANNED-DURATION=")
+				p.buf.WriteString(strconv.FormatFloat(seg.DateRange.PlannedDuration, 'f', 3, 32))
+			}
+			if seg.DateRange.SCTE35Out != "" {
+				p.buf.WriteString(",SCTE35-OUT=")
+				p.buf.WriteString(seg.DateRange.SCTE35Out)
+			}
+			if seg.DateRange.SCTE35In != "" {
+				p.buf.WriteString(",SCTE35-IN=")
+				p.buf.WriteString(seg.DateRange.SCTE35In)
+			}
+			if seg.DateRange.SCTE35Command != "" {
+				p.buf.WriteString(",SCTE35-CMD=")
+				p.buf.WriteString(seg.DateRange.SCTE35Command)
+			}
+			if seg.DateRange.EndOnNext != "" {
+				p.buf.WriteString(",END-ON-NEXT=")
+				p.buf.WriteString(seg.DateRange.EndOnNext)
+			}
+			p.buf.WriteRune('\n')
+		}
 		p.buf.WriteString("#EXTINF:")
 		if str, ok := durationCache[seg.Duration]; ok {
 			p.buf.WriteString(str)
@@ -714,6 +876,15 @@ func (p *MediaPlaylist) SetSCTE35(scte35 *SCTE) error {
 		return errors.New("playlist is empty")
 	}
 	p.Segments[p.last()].SCTE = scte35
+	return nil
+}
+
+// SetSCTE35 sets the SCTE cue format for the current media segment
+func (p *MediaPlaylist) SetDateRange(dateRange *DateRange) error {
+	if p.count == 0 {
+		return errors.New("playlist is empty")
+	}
+	p.Segments[p.last()].DateRange = dateRange
 	return nil
 }
 

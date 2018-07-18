@@ -435,6 +435,11 @@ func decodeLineOfMediaPlaylist(p *MediaPlaylist, wv *WV, state *decodingState, l
 			}
 			state.tagMap = false
 		}
+
+		if state.tagDateRange {
+			p.SetDateRange(state.dateRange)
+			state.tagDateRange = false
+		}
 	// start tag first
 	case line == "#EXTM3U":
 		state.m3u = true
@@ -568,6 +573,51 @@ func decodeLineOfMediaPlaylist(p *MediaPlaylist, wv *WV, state *decodingState, l
 		state.scte = new(SCTE)
 		state.scte.Syntax = SCTE35_OATCLS
 		state.scte.CueType = SCTE35Cue_End
+	case !state.tagDateRange && strings.HasPrefix(line, "#EXT-X-DATERANGE:"):
+		state.tagDateRange = true
+		state.dateRange = new(DateRange)
+		for k, v := range decodeParamsLine(line[17:]) {
+			switch k {
+			case "ID":
+				state.dateRange.ID = v
+			case "CLASS":
+				state.dateRange.Class = v
+			case "START-DATE":
+				if state.dateRange.StartDate, err = TimeParse(v); strict && err != nil {
+					return err
+				}
+				state.dateRange.HasStartDate = true
+			case "END-DATE":
+				if state.dateRange.EndDate, err = TimeParse(v); strict && err != nil {
+					return err
+				}
+				state.dateRange.HasEndDate = true
+			case "DURATION":
+				if _, err = fmt.Sscanf(v, "%f", &state.dateRange.Duration); strict && err != nil {
+					return err
+				}
+				state.dateRange.HasDuration = true
+			case "PLANNED-DURATION":
+				if _, err = fmt.Sscanf(v, "%f", &state.dateRange.PlannedDuration); strict && err != nil {
+					return err
+				}
+				state.dateRange.HasPlannedDuration = true
+			case "SCTE35-CMD":
+				state.dateRange.SCTE35Command = v
+			case "SCTE35-OUT":
+				state.dateRange.SCTE35Out = v
+			case "SCTE35-IN":
+				state.dateRange.SCTE35In = v
+			case "END-ON-NEXT":
+				if v != "YES" && strict {
+					err = errors.New("END-ON-NEXT must be \"YES\"");
+					return err
+				}
+				state.dateRange.EndOnNext = v
+			default:
+				/* Handle user defined X- tags, not implemented yet */
+			}
+		}
 	case !state.tagDiscontinuity && strings.HasPrefix(line, "#EXT-X-DISCONTINUITY"):
 		state.tagDiscontinuity = true
 		state.listType = MEDIA
