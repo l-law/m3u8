@@ -436,7 +436,7 @@ func decodeLineOfMediaPlaylist(p *MediaPlaylist, wv *WV, state *decodingState, l
 			state.tagMap = false
 		}
 
-		if state.tagDateRange {
+		if state.tagDateRange { // For future handling of DATERANGE tag before first segment
 			p.SetDateRange(state.dateRange)
 			state.tagDateRange = false
 		}
@@ -574,7 +574,6 @@ func decodeLineOfMediaPlaylist(p *MediaPlaylist, wv *WV, state *decodingState, l
 		state.scte.Syntax = SCTE35_OATCLS
 		state.scte.CueType = SCTE35Cue_End
 	case !state.tagDateRange && strings.HasPrefix(line, "#EXT-X-DATERANGE:"):
-		state.tagDateRange = true
 		state.dateRange = new(DateRange)
 		for k, v := range decodeParamsLine(line[17:]) {
 			switch k {
@@ -618,6 +617,7 @@ func decodeLineOfMediaPlaylist(p *MediaPlaylist, wv *WV, state *decodingState, l
 				/* Handle user defined X- tags, not implemented yet */
 			}
 		}
+		p.SetDateRange(state.dateRange)
 	case !state.tagDiscontinuity && strings.HasPrefix(line, "#EXT-X-DISCONTINUITY"):
 		state.tagDiscontinuity = true
 		state.listType = MEDIA

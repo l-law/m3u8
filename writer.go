@@ -325,6 +325,7 @@ func (p *MediaPlaylist) ReplaceSegments(startIndex, segmentCount uint, newSegmen
 	var buffer []*MediaSegment
 	for ; p.count > 0 ; p.count-- {
 		buffer = append(buffer, p.Segments[p.head])
+		p.Segments[p.head] = nil
 		p.head = (p.head + 1) % p.capacity
 	}
 	if newLength := uint(len(buffer)) - segmentCount + uint(len(newSegments)); newLength > p.capacity {
@@ -363,11 +364,11 @@ func (p *MediaPlaylist) SearchDateRange(id string) (uint, uint) {
 		if p.Segments[index].DateRange != nil && p.Segments[index].DateRange.ID == id {
 			if !foundCueOut && p.Segments[index].DateRange.SCTE35Out != "" {
 				foundCueOut = true
-				cueOutIndex = index
+				cueOutIndex = (count + 1) % p.capacity
 			}
 			if !foundCueIn && p.Segments[index].DateRange.SCTE35In != "" {
 				foundCueIn = true
-				cueInIndex = index
+				cueInIndex = (count + 1) % p.capacity
 			}
 		}
 		if foundCueOut && foundCueIn {
@@ -407,23 +408,43 @@ func (p *MediaPlaylist) GetDateRangeIDs() (map[string]float64) {
 
 func (p *MediaPlaylist) ReplaceDateRange(eventId string, newSegments []*MediaSegment) error {
 	startIndex, rangeLength := p.SearchDateRange(eventId)
-	rv := p.ReplaceSegments(startIndex, rangeLength, newSegments)
+	if rangeLength == 0 {
+		preSlice := (p.head + startIndex - 1 + p.capacity) % p.capacity
+		if p.Segments[preSlice] != nil {
+			p.Segments[preSlice].DateRange = nil
+		}
+		return nil
+	}
+	rv := p.ReplaceSegments(startIndex, rangeLength, newSegments) // This modifies p.head, etc
 	if rv == nil {
 		p.SetWinSize(p.Count())
-		if startIndex != 0 {
+		rangeStart := (p.head + startIndex) % p.capacity
+		preSlice := (rangeStart - 1 + p.capacity) % p.capacity
+		if p.Segments[preSlice] != nil {
+			p.Segments[preSlice].DateRange = nil
+		}
+		if rangeStart != p.head {
 			newSegments[0].Discontinuity = true
 		}
-		rangeEnd := (p.head + startIndex + uint(len(newSegments))) % p.capacity
-		if p.Segments[rangeEnd] != nil {
-			if p.Segments[rangeEnd].DateRange != nil && p.Segments[rangeEnd].DateRange.ID == eventId {
-				p.Segments[rangeEnd].DateRange = nil
-			}
-			if rangeEnd != p.head {
-				p.Segments[rangeEnd].Discontinuity = true
+
+		postSlice := (p.head + startIndex + uint(len(newSegments))) % p.capacity
+		if p.Segments[postSlice] != nil {
+			if postSlice != p.tail {
+				p.Segments[postSlice].Discontinuity = true
 			}
 		}
 	}
 	return rv
+}
+
+func (p *MediaPlaylist) ClearDateRange() error {
+	for count:= uint(0); count != p.count; count++ {
+		index := (p.head + count) % p.capacity
+		if p.Segments[index] != nil {
+			p.Segments[index].DateRange = nil
+		}
+	}
+	return nil
 }
 
 // Combines two operations: firstly it removes one chunk from the head of chunk slice and move pointer to
@@ -691,6 +712,28 @@ func (p *MediaPlaylist) Encode() *bytes.Buffer {
 			p.buf.WriteString(strconv.FormatInt(seg.Offset, 10))
 			p.buf.WriteRune('\n')
 		}
+		p.buf.WriteString("#EXTINF:")
+		if str, ok := durationCache[seg.Duration]; ok {
+			p.buf.WriteString(str)
+		} else {
+			if p.durationAsInt {
+				// Old Android players has problems with non integer Duration.
+				durationCache[seg.Duration] = strconv.FormatInt(int64(math.Ceil(seg.Duration)), 10)
+			} else {
+				// Wowza Mediaserver and some others prefer floats.
+				durationCache[seg.Duration] = strconv.FormatFloat(seg.Duration, 'f', 3, 32)
+			}
+			p.buf.WriteString(durationCache[seg.Duration])
+		}
+		p.buf.WriteRune(',')
+		p.buf.WriteString(seg.Title)
+		p.buf.WriteRune('\n')
+		p.buf.WriteString(seg.URI)
+		if p.Args != "" {
+			p.buf.WriteRune('?')
+			p.buf.WriteString(p.Args)
+		}
+		p.buf.WriteRune('\n')
 		if seg.DateRange != nil {
 			p.buf.WriteString("#EXT-X-DATERANGE:")
 			p.buf.WriteString("ID=\"")
@@ -738,28 +781,6 @@ func (p *MediaPlaylist) Encode() *bytes.Buffer {
 			}
 			p.buf.WriteRune('\n')
 		}
-		p.buf.WriteString("#EXTINF:")
-		if str, ok := durationCache[seg.Duration]; ok {
-			p.buf.WriteString(str)
-		} else {
-			if p.durationAsInt {
-				// Old Android players has problems with non integer Duration.
-				durationCache[seg.Duration] = strconv.FormatInt(int64(math.Ceil(seg.Duration)), 10)
-			} else {
-				// Wowza Mediaserver and some others prefer floats.
-				durationCache[seg.Duration] = strconv.FormatFloat(seg.Duration, 'f', 3, 32)
-			}
-			p.buf.WriteString(durationCache[seg.Duration])
-		}
-		p.buf.WriteRune(',')
-		p.buf.WriteString(seg.Title)
-		p.buf.WriteRune('\n')
-		p.buf.WriteString(seg.URI)
-		if p.Args != "" {
-			p.buf.WriteRune('?')
-			p.buf.WriteString(p.Args)
-		}
-		p.buf.WriteRune('\n')
 	}
 	if p.Closed {
 		p.buf.WriteString("#EXT-X-ENDLIST\n")
