@@ -352,33 +352,36 @@ func (p *MediaPlaylist) ReplaceSegments(startIndex, segmentCount uint, newSegmen
 	return nil
 }
 
-// Return (index, count)
-func (p *MediaPlaylist) SearchDateRange(id string) (uint, uint) {
+// Return (index, count, extinfSum)
+func (p *MediaPlaylist) SearchDateRange(id string) (uint, uint, uint) {
 	var cueOutIndex, cueInIndex, dateRangeLength uint
 	var foundCueOut, foundCueIn bool
 	cueOutIndex, foundCueOut = 0, false
 	cueInIndex, foundCueIn = p.count, false
 	dateRangeLength = 0
+	extinfSum := float64(0)
 	for count:= uint(0); count != p.count; count++ {
 		index := (p.head + count) % p.capacity
+		extinfSum = extinfSum + p.Segments[index].Duration
 		if p.Segments[index].DateRange != nil && p.Segments[index].DateRange.ID == id {
 			if !foundCueOut && p.Segments[index].DateRange.SCTE35Out != "" {
 				foundCueOut = true
 				cueOutIndex = (count + 1) % p.capacity
+				extinfSum = 0
 			}
 			if !foundCueIn && p.Segments[index].DateRange.SCTE35In != "" {
 				foundCueIn = true
 				cueInIndex = (count + 1) % p.capacity
 			}
 		}
-		if foundCueOut && foundCueIn {
+		if foundCueIn {
 			break
 		}
 	}
 	if foundCueIn || foundCueOut {
 		dateRangeLength = (p.capacity + cueInIndex - cueOutIndex) % p.capacity
 	}
-	return cueOutIndex, dateRangeLength
+	return cueOutIndex, dateRangeLength, uint(extinfSum)
 }
 
 // Return map[DateRangeId]DateRangeDuration
@@ -407,7 +410,7 @@ func (p *MediaPlaylist) GetDateRangeIDs() (map[string]float64) {
 }
 
 func (p *MediaPlaylist) ReplaceDateRange(eventId string, newSegments []*MediaSegment) error {
-	startIndex, rangeLength := p.SearchDateRange(eventId)
+	startIndex, rangeLength, _ := p.SearchDateRange(eventId)
 	if rangeLength == 0 {
 		preSlice := (p.head + startIndex - 1 + p.capacity) % p.capacity
 		if p.Segments[preSlice] != nil {
@@ -415,7 +418,15 @@ func (p *MediaPlaylist) ReplaceDateRange(eventId string, newSegments []*MediaSeg
 		}
 		return nil
 	}
-	rv := p.ReplaceSegments(startIndex, rangeLength, newSegments) // This modifies p.head, etc
+
+	var newSegmentsInRange[]*MediaSegment
+	if startIndex == 0 {
+		newSegmentsInRange = newSegments[len(newSegments) - int(rangeLength):]
+	} else {
+		newSegmentsInRange = newSegments[:rangeLength]
+	}
+
+	rv := p.ReplaceSegments(startIndex, rangeLength, newSegmentsInRange) // This modifies p.head, etc
 	if rv == nil {
 		p.SetWinSize(p.Count())
 		rangeStart := (p.head + startIndex) % p.capacity
@@ -427,7 +438,7 @@ func (p *MediaPlaylist) ReplaceDateRange(eventId string, newSegments []*MediaSeg
 			newSegments[0].Discontinuity = true
 		}
 
-		postSlice := (p.head + startIndex + uint(len(newSegments))) % p.capacity
+		postSlice := (p.head + startIndex + uint(len(newSegmentsInRange))) % p.capacity
 		if p.Segments[postSlice] != nil {
 			if postSlice != p.tail {
 				p.Segments[postSlice].Discontinuity = true
