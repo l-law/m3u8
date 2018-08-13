@@ -409,43 +409,13 @@ func (p *MediaPlaylist) GetDateRangeIDs() (map[string]float64) {
 	return rv
 }
 
-func (p *MediaPlaylist) ReplaceDateRange(eventId string, newSegments []*MediaSegment) error {
-	startIndex, rangeLength, _ := p.SearchDateRange(eventId)
-	if rangeLength == 0 {
-		preSlice := (p.head + startIndex - 1 + p.capacity) % p.capacity
-		if p.Segments[preSlice] != nil {
-			p.Segments[preSlice].DateRange = nil
-		}
-		return nil
-	}
+func (p *MediaPlaylist) NormalizeIndex(index uint) uint {
+	in, cap := int(index), int(p.capacity)
+	return uint((in % cap + cap) % cap)
+}
 
-	var newSegmentsInRange[]*MediaSegment
-	if startIndex == 0 {
-		newSegmentsInRange = newSegments[len(newSegments) - int(rangeLength):]
-	} else {
-		newSegmentsInRange = newSegments[:rangeLength]
-	}
-
-	rv := p.ReplaceSegments(startIndex, rangeLength, newSegmentsInRange) // This modifies p.head, etc
-	if rv == nil {
-		p.SetWinSize(p.Count())
-		rangeStart := (p.head + startIndex) % p.capacity
-		preSlice := (rangeStart - 1 + p.capacity) % p.capacity
-		if p.Segments[preSlice] != nil {
-			p.Segments[preSlice].DateRange = nil
-		}
-		if rangeStart != p.head {
-			newSegments[0].Discontinuity = true
-		}
-
-		postSlice := (p.head + startIndex + uint(len(newSegmentsInRange))) % p.capacity
-		if p.Segments[postSlice] != nil {
-			if postSlice != p.tail {
-				p.Segments[postSlice].Discontinuity = true
-			}
-		}
-	}
-	return rv
+func (p *MediaPlaylist) GetSegmentByIndex(index uint) *MediaSegment {
+	return p.Segments[(p.head + index) % p.capacity]
 }
 
 func (p *MediaPlaylist) ClearDateRange() error {
