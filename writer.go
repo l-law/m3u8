@@ -384,31 +384,6 @@ func (p *MediaPlaylist) SearchDateRange(id string) (uint, uint, uint) {
 	return cueOutIndex, dateRangeLength, uint(extinfSum)
 }
 
-// Return map[DateRangeId]DateRangeDuration
-func (p *MediaPlaylist) GetDateRangeIDs() (map[string]float64) {
-	rv := make(map[string]float64)
-	for count:= uint(0); count != p.count; count++ {
-		index := (p.head + count) % p.capacity
-		if p.Segments[index].DateRange != nil {
-			idFound := false // Check if ID is found already
-			for id, _ := range rv {
-				if id == p.Segments[index].DateRange.ID {
-					idFound = true
-					break
-				}
-			}
-			if !idFound {
-				if p.Segments[index].DateRange.HasDuration {
-					rv[p.Segments[index].DateRange.ID] = p.Segments[index].DateRange.Duration
-				} else {
-					rv[p.Segments[index].DateRange.ID] = p.Segments[index].DateRange.PlannedDuration
-				}
-			}
-		}
-	}
-	return rv
-}
-
 func (p *MediaPlaylist) NormalizeIndex(index uint) uint {
 	in, cap := int(index), int(p.capacity)
 	return uint((in % cap + cap) % cap)
