@@ -104,6 +104,7 @@ const (
 type MediaPlaylist struct {
 	TargetDuration float64
 	SeqNo          uint64 // EXT-X-MEDIA-SEQUENCE
+	DisconSeqNo    uint64 // EXT-X-DISCONTINUITY-SEQUENCE
 	Segments       []*MediaSegment
 	Args           string // optional arguments placed after URIs (URI?Args)
 	Iframe         bool   // EXT-X-I-FRAMES-ONLY
